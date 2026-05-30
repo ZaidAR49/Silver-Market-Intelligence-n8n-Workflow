@@ -1,0 +1,394 @@
+{
+  "name": "Silver Trading AI Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://finance.yahoo.com/rss/headline?s=SI=F",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "253e6bd2-812b-4fbc-91eb-aabfe0a12e75",
+      "name": "Yahoo Finance Silver RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1088,
+        1488
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.investing.com/rss/news_25.rss",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "e4e47cb4-ba2c-4262-a456-aec485638c50",
+      "name": "Investing.com Commodities RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1088,
+        1680
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "08e6e786-569a-4ea0-819c-6aabbad678da",
+      "name": "Daily 8AM Mon-Fri1",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        864,
+        1488
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://query1.finance.yahoo.com/v8/finance/chart/SI=F?interval=1d&range=5d",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "a2c65278-4385-4e42-b569-01bb3a127c76",
+      "name": "Get Silver Price1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1088,
+        1296
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// ═══════════════════════════════════════════════\n// SILVER MARKET INTELLIGENCE — PROMPT BUILDER\n// ═══════════════════════════════════════════════\n\n// --- Helper: Parse RSS XML text ---\nfunction parseRSSXml(xmlText) {\n  if (!xmlText || typeof xmlText !== 'string') return [];\n  const items = [];\n  const itemBlocks = xmlText.match(/<item[\\s\\S]*?<\\/item>/gi) || [];\n  for (const block of itemBlocks.slice(0, 7)) {\n    // Title — handles both CDATA and plain text\n    const titleMatch =\n      block.match(/<title><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/title>/i) ||\n      block.match(/<title>([\\s\\S]*?)<\\/title>/i);\n    // Description / summary\n    const descMatch =\n      block.match(/<description><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/description>/i) ||\n      block.match(/<description>([\\s\\S]*?)<\\/description>/i) ||\n      block.match(/<summary>([\\s\\S]*?)<\\/summary>/i);\n    // Date\n    const dateMatch =\n      block.match(/<pubDate>([\\s\\S]*?)<\\/pubDate>/i) ||\n      block.match(/<published>([\\s\\S]*?)<\\/published>/i);\n\n    const title = (titleMatch?.[1] || '').replace(/<[^>]+>/g, '').trim();\n    const desc  = (descMatch?.[1]  || '').replace(/<[^>]+>/g, '').substring(0, 300).trim();\n    const date  = (dateMatch?.[1]  || '').trim();\n\n    if (title) items.push({ title, description: desc, pubDate: date });\n  }\n  return items;\n}\n\n// --- 1. Silver Spot Price (Yahoo Finance) ---\nlet currentPrice = 'N/A', prevClose = 'N/A', high52w = 'N/A', low52w = 'N/A';\nlet priceChangePct = 0;\ntry {\n  const silverRaw = $('Get Silver Price1').first().json;\n  const meta = silverRaw?.chart?.result?.[0]?.meta || {};\n  currentPrice   = (meta.regularMarketPrice   || 0).toFixed(2);\n  prevClose      = (meta.chartPreviousClose   || 0).toFixed(2);\n  high52w        = (meta.fiftyTwoWeekHigh     || 0).toFixed(2);\n  low52w         = (meta.fiftyTwoWeekLow      || 0).toFixed(2);\n  priceChangePct = prevClose > 0\n    ? parseFloat((((currentPrice - prevClose) / prevClose) * 100).toFixed(2))\n    : 0;\n} catch(e) { currentPrice = 'Unavailable'; }\n\n// --- 2. Parse Yahoo Finance Silver RSS ---\nlet yahooSection = 'No Yahoo Finance silver news retrieved.';\ntry {\n  const rawXml = $('Yahoo Finance Silver RSS').first().json.data || '';\n  const items  = parseRSSXml(rawXml);\n  if (items.length > 0) {\n    yahooSection = items.map(i =>\n      `• ${i.title}\\n  🕐 ${i.pubDate}\\n  ${i.description}`\n    ).join('\\n\\n');\n  }\n} catch(e) { yahooSection = 'Yahoo Finance RSS error: ' + e.message; }\n\n// --- 3. Parse Investing.com Commodities RSS ---\nlet investingSection = 'No Investing.com commodities news retrieved.';\ntry {\n  const rawXml = $('Investing.com Commodities RSS').first().json.data || '';\n  const items  = parseRSSXml(rawXml);\n  if (items.length > 0) {\n    investingSection = items.map(i =>\n      `• ${i.title}\\n  🕐 ${i.pubDate}\\n  ${i.description}`\n    ).join('\\n\\n');\n  }\n} catch(e) { investingSection = 'Investing.com RSS error: ' + e.message; }\n\n// --- 4. Date string (Amman timezone) ---\nconst today = new Date().toLocaleDateString('en-US', {\n  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',\n  timeZone: 'Asia/Amman'\n});\n\nconst changeArrow = priceChangePct > 0 ? '▲' : priceChangePct < 0 ? '▼' : '—';\nconst changeSign  = priceChangePct > 0 ? '+' : '';\n\n// --- 5. Assemble the full prompt ---\nconst userMessage = `\nSILVER MARKET INTELLIGENCE BRIEF\nDate: ${today}\n${'═'.repeat(50)}\n\n📊 SILVER FUTURES PRICE DATA (SI=F — Yahoo Finance)\n${'─'.repeat(50)}\nCurrent Spot Price : $${currentPrice} / oz\nPrevious Close     : $${prevClose} / oz\nDay Change         : ${changeArrow} ${changeSign}${priceChangePct}%\n52-Week High       : $${high52w} / oz\n52-Week Low        : $${low52w} / oz\n\n${'═'.repeat(50)}\n📰 YAHOO FINANCE — Silver News\n${'─'.repeat(50)}\n${yahooSection}\n\n${'═'.repeat(50)}\n📰 INVESTING.COM — Commodities News\n${'─'.repeat(50)}\n${investingSection}\n\n${'═'.repeat(50)}\n\nPlease analyze everything above and provide your full structured silver market assessment following your system instructions exactly.\n`.trim();\n\nreturn [{\n  json: {\n    userMessage,\n    currentPrice:   parseFloat(currentPrice) || 0,\n    prevClose:      parseFloat(prevClose) || 0,\n    priceChangePct,\n    high52w:        parseFloat(high52w) || 0,\n    low52w:         parseFloat(low52w) || 0,\n    today\n  }\n}];\n"
+      },
+      "id": "0847dcf7-f4fd-4abb-87e7-0798c387eec0",
+      "name": "Build AI Prompt1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        1488
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5-chat-latest",
+          "mode": "list",
+          "cachedResultName": "gpt-5-chat-latest"
+        },
+        "options": {
+          "maxTokens": 2500,
+          "temperature": 0.2
+        }
+      },
+      "id": "2889905f-d73c-493a-9aff-6fe34ad6094b",
+      "name": "OpenAI GPT-4o1",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1760,
+        1696
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "2076665816",
+        "text": "=🥈 *SILVER DAILY BRIEF*\n📅 {{ $('Build AI Prompt1').first().json.today }}\n\n💰 *Price:* ${{ $('Build AI Prompt1').first().json.currentPrice }} / ${{ ($('Build AI Prompt1').first().json.currentPrice*0.709).toFixed(1)  }}JOD / oz \n\n|  *Change:* {{ $('Build AI Prompt1').first().json.priceChangePct }}%\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n{{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "6c120196-7a88-4466-9405-ff8f119d7363",
+      "name": "Send Daily Report1",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2336,
+        1584
+      ],
+      "webhookId": "016e1b85-98d4-4936-b085-e9cedb94d06f",
+      "credentials": {
+        "telegramApi": {
+          "id": "7pACzLT3fGYj9LBx",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1312,
+        1472
+      ],
+      "id": "653055c5-1dff-47b9-b049-cf34d22aba7a",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "eb2e4561-70fa-4fe7-a31f-62505d79affe",
+              "leftValue": "={{ Math.abs($('Build AI Prompt1').item.json.priceChangePct)}}",
+              "rightValue": 2.5,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2112,
+        1488
+      ],
+      "id": "47b71d6d-9275-481d-945f-c9e237655ceb",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "chatId": "2076665816",
+        "text": "=🚨 *SILVER PRICE ALERT — BIG MOVE DETECTED*\n📅 {{ $('Build AI Prompt1').first().json.today }}\n\n━━━━━━━━━━━━━━━━━━━━━━\n💰 *Price:* ${{ $('Build AI Prompt1').first().json.currentPrice }}/oz\n🇯🇴 *JOD:* ${{ ($('Build AI Prompt1').first().json.currentPrice * 0.709).toFixed(1) }} JOD/oz\n📊 *Change:* {{ $('Build AI Prompt1').first().json.priceChangePct }}%\n━━━━━━━━━━━━━━━━━━━━━━\n📈 *52W High:* ${{ $('Build AI Prompt1').first().json.high52w }}/oz\n📉 *52W Low:* ${{ $('Build AI Prompt1').first().json.low52w }}/oz\n━━━━━━━━━━━━━━━━━━━━━━\n⚠️ _Rule-based alert — no AI involved. Verify manually._",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "725200ea-55d9-4583-a515-04f3fc69f957",
+      "name": "alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2336,
+        1392
+      ],
+      "webhookId": "016e1b85-98d4-4936-b085-e9cedb94d06f",
+      "credentials": {
+        "telegramApi": {
+          "id": "7pACzLT3fGYj9LBx",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# 🥈 Silver Market Intelligence\n\nSends a daily silver market brief to Telegram every weekday at 8AM (Amman time).\n\n---\n\n## What it does\n\n1. Fetches the silver futures price (SI=F) from Yahoo Finance\n2. Pulls headlines from Yahoo Finance and Investing.com RSS feeds\n3. Merges everything and builds a prompt\n4. AI agent writes a full analysis in Arabic\n5. Sends it to Telegram\n6. If the price moved ≥ 2.5%, also sends a separate alert first\n\n---\n\n## Setup\n\n1. Import the JSON into n8n\n2. Add your **OpenAI** API key\n3. Add your **Telegram bot token**\n4. Replace `chatId: 2076665816` in both Telegram nodes with your own\n\n---\n\n## Things you may want to change\n\n| What | Where | Default |\n|---|---|---|\n| Telegram chat ID | Both Telegram nodes | `2076665816` |\n| Alert threshold | `If` node | `2.5%` |\n| JOD exchange rate | `Build AI Prompt` + Telegram messages | `0.709` |\n| Schedule | `Daily 8AM Mon–Fri` trigger | `0 8 * * 1-5` |\n| AI model | `OpenAI GPT-4o1` node | `gpt-5-chat-latest` |\n\n---\n\n> ⚠️ For informational purposes only. Not financial advice.",
+        "height": 592,
+        "width": 624
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1312,
+        704
+      ],
+      "id": "7dbec8f5-47a8-40df-9b93-3eca5d12b4dc",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.userMessage }}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "# Section 0 — Market Data Processing (Entry Point)  Before anything in Section 1 applies, check your input:  **IF** the input contains silver market data (price, news, headlines):   You are acting as the master Silver Market Analyst.      Step A — Write the market analysis in ARABIC using this exact format:    🥈 *تقرير الفضة اليومي*   📅 <التاريخ>   ━━━━━━━━━━━━━━━━━━━━━━    📊 *ملخص السعر*   💰 السعر الحالي: $<السعر> / أوقية   🇯🇴 بالدينار: <السعر × 0.709> دينار / أوقية   📉 التغيير اليومي: <النسبة>%   📈 أعلى سعر 52 أسبوع: $<high52w>   📉 أدنى سعر 52 أسبوع: $<low52w>   ━━━━━━━━━━━━━━━━━━━━━━    🎯 *توجه السوق:* صاعد 🟢 / محايد 🟡 / هابط 🔴   ━━━━━━━━━━━━━━━━━━━━━━ ⚖️ *توصية التداول:* [شراء 🟢 / بيع 🔴 / احتفاظ 🟡]   🎯 *السعر المستهدف للتنفيذ:* $<السعر المقترح>   ━━━━━━━━━━━━━━━━━━━━━━   📰 *أبرز الأخبار المؤثرة*   1️⃣ <الخبر الأول وتأثيره>   2️⃣ <الخبر الثاني وتأثيره>   3️⃣ <الخبر الثالث وتأثيره>   ━━━━━━━━━━━━━━━━━━━━━━    🔮 *التوقعات قصيرة المدى*   <جملة أو جملتان بالعربية>   ━━━━━━━━━━━━━━━━━━━━━━   ⚠️ _هذا التقرير للأغراض المعلوماتية فقط، وليس نصيحة استثمارية._    Step B — Determine severity:   - \"urgent\" → price change >= 2.5% in either direction OR price within 2% of 52W high/low   - \"info\"   → all other cases     Step C — Return your analysis as plain text output.  **IF** the input already contains alert_message and channel fields:   Skip this section entirely. Proceed directly to Section 1.  --- # Section 1 — Role & Objective You are the **Silver Market Alert Agent** — a precision notification dispatcher operating as an AI Agent Tool within the n8n silver trading intelligence pipeline. Your sole function is to process alert requests from the master Silver AI Analyst and deliver them immediately via Telegram, Gmail, or both.  Your success criterion is the exact, successful invocation of the specified delivery tools using properly formatted payloads (including HTML for Gmail), followed by returning a strict JSON response confirming the action. You do not analyze data; you only route and format alerts.  ---  # Section 2 — Input Context  You will receive an invocation payload from the master Silver AI Analyst containing the following instruction fields:  * `alert_message` (Required): The core text of the market alert. * `channel` (Required): The delivery routing path. Must be `\"telegram\"`, `\"email\"`, or `\"both\"`. * `subject` (Optional): The email subject line. Required if the channel includes email. * `severity` (Optional): The priority level. Must be `\"urgent\"` or `\"info\"`.  Do not reference or assume any field not listed here. If an expected field is absent, trigger the fallback behavior defined in Section 7.  ---  # Section 3 — Agent Behavior & Thinking Process  Step 1: Read and validate input fields against the schema in  Step 4: Verify your output matches the schema in Section 9 before returning it. Step 5: If any step fails, execute the fallback defined in Section 7.  Before producing your final output, perform a self-check: Does every value in your output come directly from the input data or a tool result? If any value was inferred or assumed without a traceable source, replace it with the fallback value.    # Section 4 — Rules & Instructions  * Do not add conversational filler, preambles, or explanations to your output. * Do not echo the input data in your output. * Do not fabricate data. If a value is unavailable, use the defined fallback. * Execute deterministically: given the same input, always produce the same output. * Do not make assumptions about fields, APIs, or behaviors not described in this prompt. * Never modify the output schema to add extra fields, even if they seem helpful. * When invoking the Gmail tool, the `message` parameter MUST be formatted as valid HTML. Plain text is forbidden for Gmail.  ---  # Section 5 — Limitations & Constraints  * **Knowledge boundary:** Your knowledge is limited to what is described in this prompt and what the input data contains. Do not use external knowledge to fill gaps. * **No assumption rule:** If a required piece of information is missing from the input, do not guess. Use the fallback behavior. * **Schema fidelity:** The output schema in Section 9 is fixed. Do not add, remove, or rename any fields. * **Tool boundary:** You may only use tools listed in Section 4. No other actions are permitted. * **Hardcoded Routing:** Do not attempt to guess or insert a `sendTo` email address or `chatId`. The nodes are pre-configured; supply only the message/subject parameters required by the tools.  ---  # Section 6 — Conditions & Edge Cases  * **IF** a required input field (`alert_message` or `channel`) is null or missing:   → Output: `{ \"status\": \"error\", \"reason\": \"missing_field:<field_name>\", \"data\": null }` * **IF** `channel` includes `\"email\"` but `subject` is missing:   → Use the fallback subject: `\"Silver Market Alert\"`. * **IF** an unrecognized `channel` value is provided:   → Output: `{ \"status\": \"error\", \"reason\": \"invalid_channel_value\", \"data\": null }` * **IF** a tool call returns an error:   → Log the tool name and error code. Do not retry. Return the error schema immediately. * **IF** the input data does not match the expected schema:   → Do not attempt to process it. Return the error schema immediately. * **IF** you are uncertain whether a value is correct:   → Use the fallback value. Do not guess.  ---  # Section 7 — Token Optimization Protocol  * Do not echo the input data in your output. * Output raw JSON only. Do not wrap it in markdown code fences. * Omit all reasoning from the final output unless the input contains a field `\"debug\": true`. * Use concise key names as defined in Section 9. * Do not include null fields in your output unless the downstream schema explicitly requires them. * Do not add explanatory comments inside the JSON.  ---  # Section 8 — Output Schema  Return only this JSON object. Nothing before it, nothing after it. All string values must be derived from input data or tool results. The status field must always be present. The data object fields are defined specifically for this workflow based on the user's answers.  {   \"status\": \"success | error\",   \"data\": {     \"delivered_channels\": [\"telegram\" | \"email\"],     \"severity_applied\": \"urgent | info\"   },   \"err\": null,   \"meta\": {     \"tool_used\": \"Send a text message in Telegram | Gmail | both | null\"   } }"
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1760,
+        1488
+      ],
+      "id": "938216c6-f418-43ae-b909-74934fe1cd0f",
+      "name": "Basic LLM Chain"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Yahoo Finance Silver RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Daily 8AM Mon-Fri1": {
+      "main": [
+        [
+          {
+            "node": "Get Silver Price1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Yahoo Finance Silver RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Investing.com Commodities RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Silver Price1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Prompt1": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI GPT-4o1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Investing.com Commodities RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Build AI Prompt1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Daily Report1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Daily Report1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "b72ae5bc-a2b4-4642-8676-b4eb96d46590",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a229eca5cf13650efc859e1224c0390899acf3f57995cfd807ce983c7c63f664"
+  },
+  "id": "YAY1q0qRs9WMFtgF",
+  "tags": []
+}
